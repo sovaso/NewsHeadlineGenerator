@@ -140,7 +140,7 @@ class Encoder(tf.keras.layers.Layer):
         x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         x += self.positional_encoding[:, :sequence_length, :]
         x = self.dropout(x, training=training)
-        for i in range(self.num_layers):
+        for i in range(self.number_of_layers):
             x = self.encoder_layers[i](x, training, mask)
         return x
 
@@ -191,7 +191,7 @@ class Decoder(tf.keras.layers.Layer):
         x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
         x += self.positional_encoding[:, :sequence_length, :]
         x = self.dropout(x, training=training)
-        for i in range(self.num_layers):
+        for i in range(self.number_of_layers):
             x, block1, block2 = self.decoder_layers[i](x, encoder_output, training, look_ahead_mask, padding_mask)
             attention_weights['decoder_layer{}_block1'.format(i + 1)] = block1
             attention_weights['decoder_layer{}_block2'.format(i + 1)] = block2

@@ -94,7 +94,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         super(MultiHeadAttention, self).__init__()
         self.number_of_heads = number_of_heads
         self.d_model = d_model
-        self.depth = d_model // self.num_heads
+        self.depth = d_model // self.number_of_heads
         self.weights_query = tf.keras.layers.Dense(d_model)
         self.weights_key = tf.keras.layers.Dense(d_model)
         self.weights_value = tf.keras.layers.Dense(d_model)
@@ -109,7 +109,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         :return: reshaped input suitable for heads working in parallel
         """
 
-        x = tf.reshape(x, (batch_size, -1, self.num_heads, self.depth))
+        x = tf.reshape(x, (batch_size, -1, self.number_of_heads, self.depth))
         return tf.transpose(x, perm=[0, 2, 1, 3])
 
     def call(self, value, key, query, mask):
