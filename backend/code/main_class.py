@@ -4,11 +4,11 @@ import pickle
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from transformer_model import Transformer
-from train_util import *
+from code.transformer_model import Transformer
+from code.train_util import *
 
 
-class TrainNewsHeadlineGenerator:
+class NewsHeadlineGenerator:
     """
     Main class for training this project to generate news' headlines
     """
@@ -43,6 +43,10 @@ class TrainNewsHeadlineGenerator:
         self.encoder_vocabulary_size = None
         self.decoder_vocabulary_size = None
         self.dataset = None
+        self.transformer = None
+        self.optimizer = None
+        self.summary_tokenizer = None
+        self.document_tokenizer = None
 
     def import_dataset(self, path, document_column_name, summary_column_name):
         """
@@ -71,14 +75,14 @@ class TrainNewsHeadlineGenerator:
         # filtering unnecessary characters from the input and target
         filters = '!"#$%&()*+,-./:;=?@[\\]^_`{|}~\t\n'
         oov_token = '<unk>'
-        document_tokenizer = tf.keras.preprocessing.text.Tokenizer(oov_token=oov_token)
-        summary_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters=filters, oov_token=oov_token)
-        document_tokenizer.fit_on_texts(self.document)
-        summary_tokenizer.fit_on_texts(self.summary)
-        inputs = document_tokenizer.texts_to_sequences(self.document)
-        targets = summary_tokenizer.texts_to_sequences(self.summary)
-        self.encoder_vocabulary_size = len(document_tokenizer.word_index) + 1
-        self.decoder_vocabulary_size = len(summary_tokenizer.word_index) + 1
+        self.document_tokenizer = tf.keras.preprocessing.text.Tokenizer(oov_token=oov_token)
+        self.summary_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters=filters, oov_token=oov_token)
+        self.document_tokenizer.fit_on_texts(self.document)
+        self.summary_tokenizer.fit_on_texts(self.summary)
+        inputs = self.document_tokenizer.texts_to_sequences(self.document)
+        targets = self.summary_tokenizer.texts_to_sequences(self.summary)
+        self.encoder_vocabulary_size = len(self.document_tokenizer.word_index) + 1
+        self.decoder_vocabulary_size = len(self.summary_tokenizer.word_index) + 1
         inputs = tf.keras.preprocessing.sequence.pad_sequences(inputs, maxlen=self.encoder_max_length, padding='post',
                                                                truncating='post')
         targets = tf.keras.preprocessing.sequence.pad_sequences(targets, maxlen=self.decoder_max_length, padding='post',
@@ -88,22 +92,22 @@ class TrainNewsHeadlineGenerator:
         self.dataset = tf.data.Dataset.from_tensor_slices((inputs, targets)).shuffle(self.buffer_size).batch(
                                                                                                     self.batch_size)
 
-    def train_transformer(self):
+    def train_transformer(self, train=True):
         """
         Main function for training the transformer
         """
 
         learning_rate = CustomLearningRateSchedule(self.d_model)
-        optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
+        self.optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
         train_loss = tf.keras.metrics.Mean(name='train_loss')
-        transformer = Transformer(self.number_of_layers, self.d_model, self.number_of_heads, self.dff,
-                                  self.encoder_vocabulary_size, self.decoder_vocabulary_size,
-                                  positional_encoding_input=self.encoder_vocabulary_size,
-                                  positional_encoding_target=self.decoder_vocabulary_size)
+        self.transformer = Transformer(self.number_of_layers, self.d_model, self.number_of_heads, self.dff,
+                                       self.encoder_vocabulary_size, self.decoder_vocabulary_size,
+                                       positional_encoding_input=self.encoder_vocabulary_size,
+                                       positional_encoding_target=self.decoder_vocabulary_size)
         # making the checkpoints to keep the parameters for the model after some epochs
         checkpoint_path = "../checkpoints"
-        checkpoint = tf.train.Checkpoint(transformer=transformer, optimizer=optimizer)
-        checkpoint_manager = tf.train.CheckpointManager(checkpoint, checkpoint_path, max_to_keep=5)
+        checkpoint = tf.train.Checkpoint(transformer=self.transformer, optimizer=self.optimizer)
+        checkpoint_manager = tf.train.CheckpointManager(checkpoint, checkpoint_path, max_to_keep=2)
         if checkpoint_manager.latest_checkpoint:
             checkpoint.restore(checkpoint_manager.latest_checkpoint)
             print('Latest checkpoint restored!!')
@@ -122,43 +126,59 @@ class TrainNewsHeadlineGenerator:
             target_real = target[:, 1:]
             encoder_padding_mask, combined_mask, decoder_padding_mask = create_masks(input, target_input)
             with tf.GradientTape() as tape:
-                predictions, _ = transformer(input, target_input, training=True,
-                                             encoder_padding_mask=encoder_padding_mask, look_ahead_mask=combined_mask,
-                                             decoder_padding_mask=decoder_padding_mask)
+                predictions, _ = self.transformer(input, target_input, training=True,
+                                                  encoder_padding_mask=encoder_padding_mask,
+                                                  look_ahead_mask=combined_mask,
+                                                  decoder_padding_mask=decoder_padding_mask)
                 loss = loss_function(target_real, predictions)
-            gradients = tape.gradient(loss, transformer.trainable_variables)
-            optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
+            gradients = tape.gradient(loss, self.transformer.trainable_variables)
+            self.optimizer.apply_gradients(zip(gradients, self.transformer.trainable_variables))
             train_loss(loss)
 
-        for epoch in range(self.epochs):
-            start_time = time.time()
-            train_loss.reset_states()
-            for (batch, (input, target)) in enumerate(self.dataset):
-                train_step(input, target)
-                if batch % 10 == 0:
-                    print('Epoch {} Batch {} Loss {:.4f}'.format(epoch + 1, batch, train_loss.result()))
-            if (epoch + 1) % 5 == 0:
-                checkpoint_save_path = checkpoint_manager.save()
-                print('Saving checkpoint for epoch {} at {}'.format(epoch + 1, checkpoint_save_path))
-            print('Epoch {} Loss {:.4f}'.format(epoch + 1, train_loss.result()))
-            print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start_time))
+        if train:
+            for epoch in range(self.epochs):
+                start_time = time.time()
+                train_loss.reset_states()
+                for (batch, (input, target)) in enumerate(self.dataset):
+                    train_step(input, target)
+                    if batch % 10 == 0:
+                        print('Epoch {} Batch {} Loss {:.4f}'.format(epoch + 1, batch, train_loss.result()))
+                if (epoch + 1) % 5 == 0:
+                    checkpoint_save_path = checkpoint_manager.save()
+                    print('Saving checkpoint for epoch {} at {}'.format(epoch + 1, checkpoint_save_path))
+                print('Epoch {} Loss {:.4f}'.format(epoch + 1, train_loss.result()))
+                print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start_time))
 
+    def test_transformer(self, input_document):
+        self.train_transformer(train=False)
+        input_document = self.document_tokenizer.texts_to_sequences([input_document])
+        input_document = tf.keras.preprocessing.sequence.pad_sequences(input_document, maxlen=self.encoder_max_length,
+                                                                       padding='post', truncating='post')
+        encoder_input = tf.expand_dims(input_document[0], 0)
 
-if __name__ == "__main__":
-    """
-    The main function to run the training
-    """
+        decoder_input = [self.summary_tokenizer.word_index["<go>"]]
+        output = tf.expand_dims(decoder_input, 0)
+        summarized = None
+        for i in range(self.decoder_max_length):
+            enc_padding_mask, combined_mask, dec_padding_mask = create_masks(encoder_input, output)
 
-    news_headline_generator = TrainNewsHeadlineGenerator(number_of_layers = 4,
-                                                         d_model = 128,
-                                                         dff = 512,
-                                                         number_of_heads = 8,
-                                                         epochs = 20,
-                                                         encoder_max_length = 400,
-                                                         decoder_max_length = 75,
-                                                         buffer_size = 20000,
-                                                         batch_size = 64)
-    news_headline_generator.import_dataset("../dataset/inshorts.xlsx", document_column_name='Short',
-                                           summary_column_name='Headline')
-    news_headline_generator.preprocess_data()
-    news_headline_generator.train_transformer()
+            predictions, attention_weights = self.transformer(
+                encoder_input,
+                output,
+                False,
+                enc_padding_mask,
+                combined_mask,
+                dec_padding_mask
+            )
+
+            predictions = predictions[:, -1:, :]
+            predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
+
+            if predicted_id == self.summary_tokenizer.word_index["<stop>"]:
+                break
+
+            output = tf.concat([output, predicted_id], axis=-1)
+
+        summarized = tf.squeeze(output, axis=0)
+        summarized = np.expand_dims(summarized[1:], 0)
+        return self.summary_tokenizer.sequences_to_texts(summarized)[0]

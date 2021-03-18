@@ -1,0 +1,18 @@
+<div class="container-fluid">
+    <h1>News Headline Generator</h1>
+    <form #predictForm="ngForm" (ngSubmit)="onSubmit()">
+
+    {{ predictForm.value | json }}
+
+        <div class="form-group">
+            <label>Short</label>
+            <input type="text" required #short="ngModel" class="form-control" 
+            [class.is-invalid]="short.invalid && short.touched" name="short" [(ngModel)]="input">
+            <small class="text-danger" [class.d-none]="short.valid || short.untouched">Cannot be empty!</small>
+        </div>
+
+        <button [disabled]="predictForm.form.invalid" class="btn btn-primary" type="submit">Predict</button>
+    </form>
+
+    <h3>Output is -> {{ output }}</h3>
+</div>
