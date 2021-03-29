@@ -1,18 +1,29 @@
+<nav class="navbar navbar-expand-sm bg-primary navbar-dark">
+    <ul class="navbar-nav">
+        <li class="nav-item active">
+            <a class="nav-link text-white" href="#">News Headline Generator</a>
+          </li>
+    </ul>
+</nav>
+
 <div class="container-fluid">
-    <h1>News Headline Generator</h1>
     <form #predictForm="ngForm" (ngSubmit)="onSubmit()">
 
-    {{ predictForm.value | json }}
+        <br>
+        {{ predictForm.value | json }}
 
         <div class="form-group">
+            <br>
             <label>Short</label>
             <input type="text" required #short="ngModel" class="form-control" 
             [class.is-invalid]="short.invalid && short.touched" name="short" [(ngModel)]="input">
             <small class="text-danger" [class.d-none]="short.valid || short.untouched">Cannot be empty!</small>
         </div>
+        <br>
 
         <button [disabled]="predictForm.form.invalid" class="btn btn-primary" type="submit">Predict</button>
     </form>
 
-    <h3>Output is -> {{ output }}</h3>
+    <br>
+    <h3>Generated headline -> {{ output }}</h3>
 </div>

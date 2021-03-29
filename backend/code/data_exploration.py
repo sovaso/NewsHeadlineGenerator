@@ -7,13 +7,17 @@ if __name__ == "__main__":
     Main function for the data exploration of the train set
     """
 
-    # reading the dataset
-    news = pd.read_excel("../dataset/inshorts.xlsx")
+    # read train and test set
+    train_news = pd.read_csv("../dataset/train.csv")
+    test_news = pd.read_csv("../dataset/train.csv")
     # dropping the irrelevant columns from the dataframe
-    news.drop(['Source ', 'Time ', 'Publish Date'], axis=1, inplace=True)
+    train_news.drop(['Source ', 'Time ', 'Publish Date'], axis=1, inplace=True)
+    test_news.drop(['Source ', 'Time ', 'Publish Date'], axis=1, inplace=True)
     # printing the head of the dataset
-    print("=== DATASET HEAD ===")
-    print(news.head())
+    print("=== TRAIN DATASET HEAD ===")
+    print(train_news.head())
+    print("=== TRAIN DATASET HEAD ===")
+    print(test_news.head())
     # printing the shape of the dataset
     print("=== DATASET SHAPE ===")
     print(news.shape)

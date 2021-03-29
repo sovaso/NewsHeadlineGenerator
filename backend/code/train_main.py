@@ -10,12 +10,7 @@ if __name__ == "__main__":
                                                     d_model=128,
                                                     dff=512,
                                                     number_of_heads=8,
-                                                    epochs=20,
-                                                    encoder_max_length=400,
-                                                    decoder_max_length=75,
-                                                    buffer_size=20000,
+                                                    epochs=100,
                                                     batch_size=64)
-    news_headline_generator.import_dataset("../dataset/inshorts.xlsx", document_column_name='Short',
-                                           summary_column_name='Headline')
-    news_headline_generator.preprocess_data()
+    news_headline_generator.import_train_and_test_set("../dataset")
     news_headline_generator.train_transformer()

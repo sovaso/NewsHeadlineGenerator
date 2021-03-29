@@ -1,4 +1,4 @@
-from code.transformer_util import *
+from transformer_util import *
 import tensorflow as tf
 
 

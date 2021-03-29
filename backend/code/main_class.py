@@ -4,8 +4,9 @@ import pickle
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from code.transformer_model import Transformer
-from code.train_util import *
+import unicodedata
+from transformer_model import Transformer
+from train_util import *
 
 
 class NewsHeadlineGenerator:
@@ -13,8 +14,7 @@ class NewsHeadlineGenerator:
     Main class for training this project to generate news' headlines
     """
 
-    def __init__(self, number_of_layers, d_model, dff, number_of_heads, epochs, encoder_max_length, decoder_max_length,
-                 buffer_size, batch_size):
+    def __init__(self, number_of_layers, d_model, dff, number_of_heads, epochs, batch_size):
         """
         Constructor for the News Headline Generator
 
@@ -23,9 +23,6 @@ class NewsHeadlineGenerator:
         :param dff: inner-layer dimensionality
         :param number_of_heads: number of heads to work in parallel
         :param epochs: number of epochs to train
-        :param encoder_max_length: maximal length of the input
-        :param decoder_max_length: maximal length of the target
-        :param buffer_size: buffer size for the shuffle of the dataset
         :param batch_size: batch size for the training a transformer
         """
 
@@ -34,68 +31,91 @@ class NewsHeadlineGenerator:
         self.dff = dff
         self.number_of_heads = number_of_heads
         self.epochs = epochs
-        self.encoder_max_length = encoder_max_length
-        self.decoder_max_length = decoder_max_length
-        self.buffer_size = buffer_size
         self.batch_size = batch_size
-        self.document = None
-        self.summary = None
+        self.encoder_max_length = None
+        self.decoder_max_length = None
+        self.document_train = None
+        self.document_test = None
+        self.summary_train = None
+        self.summary_test = None
         self.encoder_vocabulary_size = None
         self.decoder_vocabulary_size = None
-        self.dataset = None
         self.transformer = None
         self.optimizer = None
         self.summary_tokenizer = None
         self.document_tokenizer = None
+        self.tokenizer = None
+        self.dataset = None
 
-    def import_dataset(self, path, document_column_name, summary_column_name):
+    def import_train_and_test_set(self, path):
         """
         Importing the dataset in program
 
         :param path: file path for the dataset
-        :param document_column_name: name of the document column in set dataframe
-        :param summary_column_name: name of the summary column in set dataframe
         """
 
-        dataset = pd.read_excel(path)
-        self.document = dataset[document_column_name]
-        self.summary = dataset[summary_column_name]
+        train_dataset = pd.read_csv(path + "/train.csv")
+        self.summary_train = train_dataset["Short"]
+        self.summary_train = self.summary_train.apply(lambda row: self.preprocess_sentence(row))
+        self.document_train = train_dataset["Headline"]
+        test_dataset = pd.read_csv(path + "/test.csv")
+        self.summary_test = test_dataset["Short"]
+        self.summary_test = self.summary_test.apply(lambda row: self.preprocess_sentence(row))
+        self.document_test = test_dataset["Headline"]
 
-    def preprocess_data(self):
+    def preprocess_sentence(self, sentence):
         """
-        Preprocessing the data in order to make it suitable for the transformer to train on them faster and better
+        Preprocessing the sentence in order to make it suitable for the transformer to train on them faster and better
+
+        :param sentence: input sentence
+        :return: preprocessed output sequence
         """
 
-        # replacing &#39; sequence of characters to represent '
-        self.document = self.document.str.replace('&#39;', '\'')
-        self.summary = self.summary.str.replace('&#39;', '\'')
-        # for recognizing the start and end of target (summary) sequences, we pad them with start (“<go>”) and end
-        # (“<stop>”) tokens
-        self.summary = self.summary.apply(lambda x: '<go> ' + x + ' <stop>')
-        # filtering unnecessary characters from the input and target
-        filters = '!"#$%&()*+,-./:;=?@[\\]^_`{|}~\t\n'
-        oov_token = '<unk>'
-        self.document_tokenizer = tf.keras.preprocessing.text.Tokenizer(oov_token=oov_token)
-        self.summary_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters=filters, oov_token=oov_token)
-        self.document_tokenizer.fit_on_texts(self.document)
-        self.summary_tokenizer.fit_on_texts(self.summary)
-        inputs = self.document_tokenizer.texts_to_sequences(self.document)
-        targets = self.summary_tokenizer.texts_to_sequences(self.summary)
-        self.encoder_vocabulary_size = len(self.document_tokenizer.word_index) + 1
-        self.decoder_vocabulary_size = len(self.summary_tokenizer.word_index) + 1
-        inputs = tf.keras.preprocessing.sequence.pad_sequences(inputs, maxlen=self.encoder_max_length, padding='post',
-                                                               truncating='post')
-        targets = tf.keras.preprocessing.sequence.pad_sequences(targets, maxlen=self.decoder_max_length, padding='post',
-                                                                truncating='post')
-        inputs = tf.cast(inputs, dtype=tf.int32)
-        targets = tf.cast(targets, dtype=tf.int32)
-        self.dataset = tf.data.Dataset.from_tensor_slices((inputs, targets)).shuffle(self.buffer_size).batch(
-                                                                                                    self.batch_size)
+        def unicode_to_ascii(sequence):
+            """
+            Converts the unicode file to ascii
+
+            :param sequence: unicode input sequence
+            :return: ascii output sequence
+            """
+
+            return ''.join(c for c in unicodedata.normalize('NFD', sequence) if unicodedata.category(c) != 'Mn')
+
+        sentence = unicode_to_ascii(sentence.lower().strip())
+        sentence = re.sub(r"([?.!,¿])", r" \1 ", sentence)
+        sentence = re.sub(r'[" "]+', " ", sentence)
+        sentence = re.sub(r"[^a-zA-Z?.!,¿]+", " ", sentence)
+        sentence = sentence.strip()
+        sentence = unicode_to_ascii('<go> ') + sentence + unicode_to_ascii(' <stop>')
+        return sentence
 
     def train_transformer(self, train=True):
         """
         Main function for training the transformer
         """
+
+        self.tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
+        self.tokenizer.fit_on_texts(self.summary_train)
+        self.encoder_vocabulary_size = len(self.tokenizer.word_index) + 1
+        self.decoder_vocabulary_size = len(self.tokenizer.word_index) + 1
+        self.encoder_max_length = 89
+        self.decoder_max_length = 14
+        self.summary_train = self.tokenizer.texts_to_sequences(self.summary_train)
+        self.summary_train = tf.keras.preprocessing.sequence.pad_sequences(self.summary_train, padding='post',
+                                                                           maxlen=self.encoder_max_length)
+        self.document_train = self.tokenizer.texts_to_sequences(self.document_train)
+        self.document_train = tf.keras.preprocessing.sequence.pad_sequences(self.document_train, padding='post',
+                                                                            maxlen=self.decoder_max_length)
+        self.summary_test = self.tokenizer.texts_to_sequences(self.summary_test)
+        self.summary_test = tf.keras.preprocessing.sequence.pad_sequences(self.summary_test, padding='post',
+                                                                          maxlen=self.encoder_max_length)
+        self.document_test = self.tokenizer.texts_to_sequences(self.document_test)
+        self.document_test = tf.keras.preprocessing.sequence.pad_sequences(self.document_test, padding='post',
+                                                                           maxlen=self.decoder_max_length)
+        self.dataset = tf.data.Dataset.from_tensor_slices((self.summary_train, self.document_train)).shuffle(
+                  len(self.summary_train))
+        self.dataset = self.dataset.padded_batch(self.batch_size, drop_remainder=True)
+        self.dataset = self.dataset.prefetch(tf.data.experimental.AUTOTUNE)
 
         learning_rate = CustomLearningRateSchedule(self.d_model)
         self.optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
@@ -111,6 +131,12 @@ class NewsHeadlineGenerator:
         if checkpoint_manager.latest_checkpoint:
             checkpoint.restore(checkpoint_manager.latest_checkpoint)
             print('Latest checkpoint restored!!')
+
+        train_loss = tf.keras.metrics.Mean(name='train_loss')
+        train_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='train_accuracy')
+
+        test_loss = tf.keras.metrics.Mean(name='test_loss')
+        test_accuracy = tf.keras.metrics.SparseCategoricalAccuracy(name='test_accuracy')
 
         @tf.function
         def train_step(input, target):
@@ -134,20 +160,41 @@ class NewsHeadlineGenerator:
             gradients = tape.gradient(loss, self.transformer.trainable_variables)
             self.optimizer.apply_gradients(zip(gradients, self.transformer.trainable_variables))
             train_loss(loss)
+            train_accuracy(target_real, predictions)
 
         if train:
             for epoch in range(self.epochs):
                 start_time = time.time()
                 train_loss.reset_states()
+                train_accuracy.reset_states()
+                test_loss.reset_states()
+                test_accuracy.reset_states()
                 for (batch, (input, target)) in enumerate(self.dataset):
                     train_step(input, target)
                     if batch % 10 == 0:
-                        print('Epoch {} Batch {} Loss {:.4f}'.format(epoch + 1, batch, train_loss.result()))
+                        print('Epoch {} Batch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1, batch,
+                                                                                     train_loss.result(),
+                                                                                     train_accuracy.result()))
                 if (epoch + 1) % 5 == 0:
                     checkpoint_save_path = checkpoint_manager.save()
                     print('Saving checkpoint for epoch {} at {}'.format(epoch + 1, checkpoint_save_path))
-                print('Epoch {} Loss {:.4f}'.format(epoch + 1, train_loss.result()))
+                print('Epoch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1, train_loss.result(),
+                                                                    train_accuracy.result()))
                 print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start_time))
+                test_target_input = self.document_test[:, :-1]
+                test_target_real = self.document_test[:, 1:]
+                encoder_padding_mask, combined_mask, decoder_padding_mask = create_masks(self.summary_test,
+                                                                                         test_target_input)
+                test_predictions, _ = self.transformer(self.summary_test, test_target_input, training=True,
+                                                  encoder_padding_mask=encoder_padding_mask,
+                                                  look_ahead_mask=combined_mask,
+                                                  decoder_padding_mask=decoder_padding_mask)
+                loss = loss_function(test_target_real, test_predictions)
+                test_loss(loss)
+                test_accuracy(test_target_real, test_predictions)
+                print('Epoch {} Test Loss {:.4f} Test Accuracy {:.4f}'.format(epoch + 1, test_loss.result(),
+                      test_accuracy.result()))
+
 
     def test_transformer(self, input_document):
         self.train_transformer(train=False)
