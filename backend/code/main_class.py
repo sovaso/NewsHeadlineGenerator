@@ -42,10 +42,12 @@ class NewsHeadlineGenerator:
         self.decoder_vocabulary_size = None
         self.transformer = None
         self.optimizer = None
-        self.summary_tokenizer = None
-        self.document_tokenizer = None
         self.tokenizer = None
         self.dataset = None
+        self.train_loss_log = []
+        self.train_accuracy_log = []
+        self.test_loss_log = []
+        self.test_accuracy_log = []
 
     def import_train_and_test_set(self, path):
         """
@@ -58,16 +60,19 @@ class NewsHeadlineGenerator:
         self.summary_train = train_dataset["Short"]
         self.summary_train = self.summary_train.apply(lambda row: self.preprocess_sentence(row))
         self.document_train = train_dataset["Headline"]
+        self.document_train = self.document_train.apply(lambda row: self.preprocess_sentence(row))
         test_dataset = pd.read_csv(path + "/test.csv")
         self.summary_test = test_dataset["Short"]
-        self.summary_test = self.summary_test.apply(lambda row: self.preprocess_sentence(row))
+        self.summary_test = self.summary_test.apply(lambda row: self.preprocess_sentence(row, is_train=False))
         self.document_test = test_dataset["Headline"]
+        self.document_test = self.document_test.apply(lambda row: self.preprocess_sentence(row, is_train=False))
 
-    def preprocess_sentence(self, sentence):
+    def preprocess_sentence(self, sentence, is_train=True):
         """
         Preprocessing the sentence in order to make it suitable for the transformer to train on them faster and better
 
         :param sentence: input sentence
+        :param is_train: boolean value to check if it is used for training purposes
         :return: preprocessed output sequence
         """
 
@@ -82,16 +87,18 @@ class NewsHeadlineGenerator:
             return ''.join(c for c in unicodedata.normalize('NFD', sequence) if unicodedata.category(c) != 'Mn')
 
         sentence = unicode_to_ascii(sentence.lower().strip())
-        sentence = re.sub(r"([?.!,¿])", r" \1 ", sentence)
-        sentence = re.sub(r'[" "]+', " ", sentence)
-        sentence = re.sub(r"[^a-zA-Z?.!,¿]+", " ", sentence)
+        if is_train:
+            sentence = re.sub(r"([?.!,¿])", r" \1 ", sentence)
+            sentence = re.sub(r'[" "]+', " ", sentence)
+            sentence = re.sub(r"[^a-zA-Z?.!,¿]+", " ", sentence)
         sentence = sentence.strip()
         sentence = unicode_to_ascii('<go> ') + sentence + unicode_to_ascii(' <stop>')
         return sentence
 
-    def train_transformer(self, train=True):
+    def preprocess_train_and_test_set(self):
         """
-        Main function for training the transformer
+        Function used to calculate needed parameters for training the transformer model, while also preprocessing given
+        train and test datasets
         """
 
         self.tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
@@ -99,7 +106,7 @@ class NewsHeadlineGenerator:
         self.encoder_vocabulary_size = len(self.tokenizer.word_index) + 1
         self.decoder_vocabulary_size = len(self.tokenizer.word_index) + 1
         self.encoder_max_length = 89
-        self.decoder_max_length = 14
+        self.decoder_max_length = 20
         self.summary_train = self.tokenizer.texts_to_sequences(self.summary_train)
         self.summary_train = tf.keras.preprocessing.sequence.pad_sequences(self.summary_train, padding='post',
                                                                            maxlen=self.encoder_max_length)
@@ -113,10 +120,33 @@ class NewsHeadlineGenerator:
         self.document_test = tf.keras.preprocessing.sequence.pad_sequences(self.document_test, padding='post',
                                                                            maxlen=self.decoder_max_length)
         self.dataset = tf.data.Dataset.from_tensor_slices((self.summary_train, self.document_train)).shuffle(
-                  len(self.summary_train))
+            len(self.summary_train))
         self.dataset = self.dataset.padded_batch(self.batch_size, drop_remainder=True)
         self.dataset = self.dataset.prefetch(tf.data.experimental.AUTOTUNE)
 
+    def writing_loss_and_accuracy_values_to_file(self):
+        """
+        Writing loss and accuracy to the txt file for both test and train dataset
+        """
+
+        path = "../log_files"
+        with open(path + "/train_loss_log.txt", 'w+') as fp:
+            fp.write(str(self.train_loss_log))
+        with open(path + "/test_loss_log.txt", 'w+') as fp:
+            fp.write(str(self.test_loss_log))
+        with open(path + "/train_accuracy_log.txt", 'w+') as fp:
+            fp.write(str(self.train_accuracy_log))
+        with open(path + "/test_accuracy_log.txt", 'w+') as fp:
+            fp.write(str(self.test_accuracy_log))
+
+    def train_transformer(self, is_train=True):
+        """
+        Main function for training the transformer
+
+        :param is_train: boolean value to check if it is called for training purposes
+        """
+
+        self.preprocess_train_and_test_set()
         learning_rate = CustomLearningRateSchedule(self.d_model)
         self.optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
         train_loss = tf.keras.metrics.Mean(name='train_loss')
@@ -162,7 +192,7 @@ class NewsHeadlineGenerator:
             train_loss(loss)
             train_accuracy(target_real, predictions)
 
-        if train:
+        if is_train:
             for epoch in range(self.epochs):
                 start_time = time.time()
                 train_loss.reset_states()
@@ -178,54 +208,55 @@ class NewsHeadlineGenerator:
                 if (epoch + 1) % 5 == 0:
                     checkpoint_save_path = checkpoint_manager.save()
                     print('Saving checkpoint for epoch {} at {}'.format(epoch + 1, checkpoint_save_path))
-                print('Epoch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1, train_loss.result(),
+                    self.writing_loss_and_accuracy_values_to_file()
+                print('[TRAIN] Epoch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1, train_loss.result(),
                                                                     train_accuracy.result()))
-                print('Time taken for 1 epoch: {} secs\n'.format(time.time() - start_time))
+                time_needed_for_epoch = time.time() - start_time
                 test_target_input = self.document_test[:, :-1]
                 test_target_real = self.document_test[:, 1:]
                 encoder_padding_mask, combined_mask, decoder_padding_mask = create_masks(self.summary_test,
                                                                                          test_target_input)
                 test_predictions, _ = self.transformer(self.summary_test, test_target_input, training=True,
-                                                  encoder_padding_mask=encoder_padding_mask,
-                                                  look_ahead_mask=combined_mask,
-                                                  decoder_padding_mask=decoder_padding_mask)
+                                                       encoder_padding_mask=encoder_padding_mask,
+                                                       look_ahead_mask=combined_mask,
+                                                       decoder_padding_mask=decoder_padding_mask)
                 loss = loss_function(test_target_real, test_predictions)
                 test_loss(loss)
                 test_accuracy(test_target_real, test_predictions)
-                print('Epoch {} Test Loss {:.4f} Test Accuracy {:.4f}'.format(epoch + 1, test_loss.result(),
+                print('[TEST] Epoch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1, test_loss.result(),
                       test_accuracy.result()))
+                print('Time taken for this epoch: {} secs\n'.format(time_needed_for_epoch))
+                # writing loss and accuracy from this epoch in lists
+                self.train_loss_log.append(train_loss.result())
+                self.train_accuracy_log.append(train_accuracy.result())
+                self.test_loss_log.append(test_loss.result())
+                self.test_accuracy_log.append(test_accuracy.result())
 
+    def test_transformer(self, input_sequence):
+        """
+        Function to test the trained transformer to see how it is performing
 
-    def test_transformer(self, input_document):
-        self.train_transformer(train=False)
-        input_document = self.document_tokenizer.texts_to_sequences([input_document])
-        input_document = tf.keras.preprocessing.sequence.pad_sequences(input_document, maxlen=self.encoder_max_length,
+        :param input_sequence: input sequence (short)
+        :return: predicted output sequence (headline)
+        """
+
+        self.train_transformer(is_train=False)
+        input_sequence = self.preprocess_sentence(input_sequence)
+        input_sequence = self.tokenizer.texts_to_sequences([input_sequence])
+        input_sequence = tf.keras.preprocessing.sequence.pad_sequences(input_sequence, maxlen=self.encoder_max_length,
                                                                        padding='post', truncating='post')
-        encoder_input = tf.expand_dims(input_document[0], 0)
-
-        decoder_input = [self.summary_tokenizer.word_index["<go>"]]
+        encoder_input = tf.expand_dims(input_sequence[0], 0)
+        decoder_input = [self.tokenizer.word_index["<go>"]]
         output = tf.expand_dims(decoder_input, 0)
-        summarized = None
         for i in range(self.decoder_max_length):
             enc_padding_mask, combined_mask, dec_padding_mask = create_masks(encoder_input, output)
-
-            predictions, attention_weights = self.transformer(
-                encoder_input,
-                output,
-                False,
-                enc_padding_mask,
-                combined_mask,
-                dec_padding_mask
-            )
-
+            predictions, attention_weights = self.transformer(encoder_input, output, False, enc_padding_mask,
+                                                              combined_mask, dec_padding_mask)
             predictions = predictions[:, -1:, :]
             predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
-
-            if predicted_id == self.summary_tokenizer.word_index["<stop>"]:
+            if predicted_id == self.tokenizer.word_index["<stop>"]:
                 break
-
             output = tf.concat([output, predicted_id], axis=-1)
-
         summarized = tf.squeeze(output, axis=0)
         summarized = np.expand_dims(summarized[1:], 0)
-        return self.summary_tokenizer.sequences_to_texts(summarized)[0]
+        return self.tokenizer.sequences_to_texts(summarized)[0]

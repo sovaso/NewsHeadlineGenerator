@@ -14,3 +14,5 @@ if __name__ == "__main__":
                                                     batch_size=64)
     news_headline_generator.import_train_and_test_set("../dataset")
     news_headline_generator.train_transformer()
+    #outputtt = news_headline_generator.test_transformer("After veteran Congress leader Rita Bahuguna Joshi joined the BJP on Thursday, she said in a press conference that Rahul Gandhi was unable to provide the kind of leadership that a national party like Congress needs. She further said that Congress President Sonia Gandhi used to listen to party members but that was not possible under Rahul Gandhi&#39;s leadership.")
+    #print("OUTPUT ->", outputtt)
