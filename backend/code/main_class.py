@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import unicodedata
-from transformer_model import Transformer
-from train_util import *
+from code.transformer_model import Transformer
+from code.train_util import *
 
 
 class NewsHeadlineGenerator:
@@ -14,7 +14,8 @@ class NewsHeadlineGenerator:
     Main class for training this project to generate news' headlines
     """
 
-    def __init__(self, number_of_layers, d_model, dff, number_of_heads, epochs, batch_size):
+    def __init__(self, number_of_layers, d_model, dff, number_of_heads, epochs, batch_size, encoder_max_length,
+                 decoder_max_length):
         """
         Constructor for the News Headline Generator
 
@@ -24,6 +25,8 @@ class NewsHeadlineGenerator:
         :param number_of_heads: number of heads to work in parallel
         :param epochs: number of epochs to train
         :param batch_size: batch size for the training a transformer
+        :param encoder_max_length: max number of words in input sequence (encoder)
+        :param decoder_max_length: max number of words in output sequence (decoder)
         """
 
         self.number_of_layers = number_of_layers
@@ -32,8 +35,8 @@ class NewsHeadlineGenerator:
         self.number_of_heads = number_of_heads
         self.epochs = epochs
         self.batch_size = batch_size
-        self.encoder_max_length = None
-        self.decoder_max_length = None
+        self.encoder_max_length = encoder_max_length
+        self.decoder_max_length = decoder_max_length
         self.document_train = None
         self.document_test = None
         self.summary_train = None
@@ -42,7 +45,8 @@ class NewsHeadlineGenerator:
         self.decoder_vocabulary_size = None
         self.transformer = None
         self.optimizer = None
-        self.tokenizer = None
+        self.summary_tokenizer = None
+        self.document_tokenizer = None
         self.dataset = None
         self.train_loss_log = []
         self.train_accuracy_log = []
@@ -101,22 +105,24 @@ class NewsHeadlineGenerator:
         train and test datasets
         """
 
-        self.tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
-        self.tokenizer.fit_on_texts(self.summary_train)
-        self.encoder_vocabulary_size = len(self.tokenizer.word_index) + 1
-        self.decoder_vocabulary_size = len(self.tokenizer.word_index) + 1
-        self.encoder_max_length = 89
-        self.decoder_max_length = 20
-        self.summary_train = self.tokenizer.texts_to_sequences(self.summary_train)
+        filters = '!"#$%&()*+,-./:;=?@[\\]^_`{|}~\t\n'
+        oov_token = '<unk>'
+        self.summary_tokenizer = tf.keras.preprocessing.text.Tokenizer(oov_token=oov_token)
+        self.document_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters=filters, oov_token=oov_token)
+        self.summary_tokenizer.fit_on_texts(self.summary_train)
+        self.document_tokenizer.fit_on_texts(self.document_train)
+        self.encoder_vocabulary_size = len(self.summary_tokenizer.word_index) + 1
+        self.decoder_vocabulary_size = len(self.document_tokenizer.word_index) + 1
+        self.summary_train = self.summary_tokenizer.texts_to_sequences(self.summary_train)
         self.summary_train = tf.keras.preprocessing.sequence.pad_sequences(self.summary_train, padding='post',
                                                                            maxlen=self.encoder_max_length)
-        self.document_train = self.tokenizer.texts_to_sequences(self.document_train)
+        self.document_train = self.document_tokenizer.texts_to_sequences(self.document_train)
         self.document_train = tf.keras.preprocessing.sequence.pad_sequences(self.document_train, padding='post',
                                                                             maxlen=self.decoder_max_length)
-        self.summary_test = self.tokenizer.texts_to_sequences(self.summary_test)
+        self.summary_test = self.summary_tokenizer.texts_to_sequences(self.summary_test)
         self.summary_test = tf.keras.preprocessing.sequence.pad_sequences(self.summary_test, padding='post',
                                                                           maxlen=self.encoder_max_length)
-        self.document_test = self.tokenizer.texts_to_sequences(self.document_test)
+        self.document_test = self.document_tokenizer.texts_to_sequences(self.document_test)
         self.document_test = tf.keras.preprocessing.sequence.pad_sequences(self.document_test, padding='post',
                                                                            maxlen=self.decoder_max_length)
         self.dataset = tf.data.Dataset.from_tensor_slices((self.summary_train, self.document_train)).shuffle(
@@ -210,7 +216,7 @@ class NewsHeadlineGenerator:
                     print('Saving checkpoint for epoch {} at {}'.format(epoch + 1, checkpoint_save_path))
                     self.writing_loss_and_accuracy_values_to_file()
                 print('[TRAIN] Epoch {} Loss {:.4f} Accuracy {:.4f}'.format(epoch + 1, train_loss.result(),
-                                                                    train_accuracy.result()))
+                      train_accuracy.result()))
                 time_needed_for_epoch = time.time() - start_time
                 test_target_input = self.document_test[:, :-1]
                 test_target_real = self.document_test[:, 1:]
@@ -242,11 +248,11 @@ class NewsHeadlineGenerator:
 
         self.train_transformer(is_train=False)
         input_sequence = self.preprocess_sentence(input_sequence)
-        input_sequence = self.tokenizer.texts_to_sequences([input_sequence])
+        input_sequence = self.summary_tokenizer.texts_to_sequences([input_sequence])
         input_sequence = tf.keras.preprocessing.sequence.pad_sequences(input_sequence, maxlen=self.encoder_max_length,
-                                                                       padding='post', truncating='post')
+                                                                       padding='post')
         encoder_input = tf.expand_dims(input_sequence[0], 0)
-        decoder_input = [self.tokenizer.word_index["<go>"]]
+        decoder_input = [self.document_tokenizer.word_index["<go>"]]
         output = tf.expand_dims(decoder_input, 0)
         for i in range(self.decoder_max_length):
             enc_padding_mask, combined_mask, dec_padding_mask = create_masks(encoder_input, output)
@@ -254,9 +260,9 @@ class NewsHeadlineGenerator:
                                                               combined_mask, dec_padding_mask)
             predictions = predictions[:, -1:, :]
             predicted_id = tf.cast(tf.argmax(predictions, axis=-1), tf.int32)
-            if predicted_id == self.tokenizer.word_index["<stop>"]:
+            if predicted_id == self.document_tokenizer.word_index["<stop>"]:
                 break
             output = tf.concat([output, predicted_id], axis=-1)
         summarized = tf.squeeze(output, axis=0)
         summarized = np.expand_dims(summarized[1:], 0)
-        return self.tokenizer.sequences_to_texts(summarized)[0]
+        return self.document_tokenizer.sequences_to_texts(summarized)[0]

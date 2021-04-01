@@ -19,7 +19,9 @@ def predict():
                                                     dff=512,
                                                     number_of_heads=8,
                                                     epochs=100,
-                                                    batch_size=64)
+                                                    batch_size=64,
+                                                    encoder_max_length=89,
+                                                    decoder_max_length=20)
     news_headline_generator.import_train_and_test_set("../dataset")
     output = news_headline_generator.test_transformer(input)
     print('OUTPUT -> ', output)
